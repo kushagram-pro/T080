@@ -20,6 +20,7 @@ from sqlalchemy import delete, func, or_, select
 from app.database import SessionLocal
 from app.models import (
     Collaboration,
+    CollaborationMessage,
     CollaborationRequest,
     Department,
     ExpertiseKeyword,
@@ -27,6 +28,7 @@ from app.models import (
     Notification,
     NotificationType,
     Project,
+    ProjectMember,
     ProjectStatus,
     Publication,
     RequestStatus,
@@ -127,8 +129,17 @@ PENDING = [
 ]
 DECLINED = [("rahul.verma", "sanjay.rao", "Antennas for implant telemetry?")]
 
+# A short conversation in the first collaboration, and a joint project on Ananya's profile
+MESSAGES = [
+    ("kavita.sharma", "Thanks for reaching out! Shall we start with the radiology report dataset?"),
+    ("ananya.iyer", "Yes. I'll share the annotation guidelines this week."),
+    ("kavita.sharma", "Great. Free for a call on Thursday afternoon?"),
+]
+JOINT_PROJECT = ("ananya.iyer", "Explainable triage assistant", "kavita.sharma")
+
 # Staff accounts for trying the oversight roles
 STAFF = [
+    ("admin", "Portal Admin (Demo)", UserRole.admin, None),
     ("research.office", "Research Office (Demo)", UserRole.research_admin, None),
     ("hod.cse", "HOD CSE (Demo)", UserRole.dept_mgmt, "CSE"),
 ]
@@ -219,6 +230,22 @@ def seed() -> None:
                                     message=f"{sender_name[b]} declined your collaboration request.",
                                     created_at=req.responded_at))
 
+        # Messages and the joint project, only once
+        x, y = ordered_pair(users["ananya.iyer"], users["kavita.sharma"])
+        first = db.scalar(select(Collaboration).where(Collaboration.faculty_a == x, Collaboration.faculty_b == y,
+                                                      Collaboration.ended_at.is_(None)))
+        if first is not None and not first.messages:
+            start = first.created_at + timedelta(hours=2)
+            for i, (key, body) in enumerate(MESSAGES):
+                db.add(CollaborationMessage(collaboration_id=first.id, sender_id=users[key], body=body,
+                                            created_at=start + timedelta(hours=3 * i),
+                                            read_at=None if i == len(MESSAGES) - 1 else start + timedelta(hours=3 * i + 1)))
+        owner, title, member = JOINT_PROJECT
+        project = db.scalar(select(Project).join(FacultyProfile).where(
+            FacultyProfile.user_id == users[owner], Project.title == title))
+        if project is not None and db.get(ProjectMember, (project.id, users[member])) is None:
+            db.add(ProjectMember(project_id=project.id, user_id=users[member]))
+
         db.commit()
         print(f"Demo data ready: {len(DEPARTMENTS)} departments, {created} new accounts "
               f"({len(FACULTY)} faculty + {len(STAFF)} staff in total).")
@@ -233,6 +260,10 @@ def remove() -> None:
             print("No demo data found.")
             return
         db.execute(delete(Notification).where(Notification.recipient_id.in_(ids)))
+        db.execute(delete(ProjectMember).where(ProjectMember.user_id.in_(ids)))
+        demo_collabs = select(Collaboration.id).where(or_(Collaboration.faculty_a.in_(ids), Collaboration.faculty_b.in_(ids)))
+        db.execute(delete(CollaborationMessage).where(
+            or_(CollaborationMessage.collaboration_id.in_(demo_collabs), CollaborationMessage.sender_id.in_(ids))))
         db.execute(delete(Collaboration).where(or_(Collaboration.faculty_a.in_(ids), Collaboration.faculty_b.in_(ids))))
         db.execute(delete(CollaborationRequest).where(
             or_(CollaborationRequest.sender_id.in_(ids), CollaborationRequest.recipient_id.in_(ids))))
