@@ -3,6 +3,7 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 import { profilesApi } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import {
+  JointProjectsSection,
   KeywordSections,
   ProfileHeader,
   ProjectsSection,
@@ -54,6 +55,7 @@ export default function ProfileView() {
       <KeywordSections profile={profile} />
       <PublicationsSection publications={profile.publications} />
       <ProjectsSection projects={profile.projects} />
+      <JointProjectsSection projects={profile.joint_projects} />
     </div>
   )
 }

@@ -85,8 +85,15 @@ export function PublicationModal({ initial, onSave, onClose }) {
   )
 }
 
-export function ProjectModal({ initial, onSave, onClose }) {
+// partners: current collaborators who can be listed on the project (a joint project)
+export function ProjectModal({ initial, partners = [], onSave, onClose }) {
   const editing = Boolean(initial?.id)
+  const listed = initial?.members ?? []
+  const [memberIds, setMemberIds] = useState(listed.map((m) => m.user_id))
+  // People already listed stay selectable even if the collaboration has since ended
+  const choices = [...partners, ...listed.filter((m) => !partners.some((p) => p.user_id === m.user_id))]
+  const toggleMember = (id) =>
+    setMemberIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
   const { form, set, errors, error, saving, save } = useItemForm(
     {
       title: initial?.title ?? '',
@@ -95,7 +102,7 @@ export function ProjectModal({ initial, onSave, onClose }) {
       start_date: initial?.start_date ?? '',
       end_date: initial?.end_date ?? '',
     },
-    onSave,
+    (payload) => onSave(payload, memberIds),
   )
 
   function submit(e) {
@@ -157,6 +164,23 @@ export function ProjectModal({ initial, onSave, onClose }) {
         <Field label="Description" error={errors.description} hint="Optional">
           <textarea rows={3} maxLength={2000} value={form.description} onChange={set('description')} />
         </Field>
+        <fieldset className="member-picker">
+          <legend>Collaborators on this project</legend>
+          {choices.length === 0 ? (
+            <p className="muted small">Once you're collaborating with colleagues, you can list them here.</p>
+          ) : (
+            <>
+              <p className="muted small">They'll see this project on their profile too.</p>
+              {choices.map((p) => (
+                <label key={p.user_id} className="check-row">
+                  <input type="checkbox" checked={memberIds.includes(p.user_id)} onChange={() => toggleMember(p.user_id)} />
+                  {p.full_name}
+                </label>
+              ))}
+            </>
+          )}
+          {errors.user_ids && <p className="field-error">{errors.user_ids}</p>}
+        </fieldset>
       </form>
     </Modal>
   )

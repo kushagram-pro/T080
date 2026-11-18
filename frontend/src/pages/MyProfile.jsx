@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { departmentsApi, profilesApi } from '../api/endpoints'
+import { collaborationsApi, departmentsApi, profilesApi } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import { PublicationModal, ProjectModal } from '../components/profile/ItemModals'
 import {
+  JointProjectsSection,
   KeywordSections,
   ProfileHeader,
   ProjectsSection,
@@ -24,6 +25,8 @@ export default function MyProfile() {
   const [projModal, setProjModal] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null) // { kind, item }
   const [deleting, setDeleting] = useState(false)
+  const [partners, setPartners] = useState([]) // current collaborators, for joint projects
+  const [savingVisibility, setSavingVisibility] = useState(false)
   const flashTimer = useRef(null)
 
   useEffect(() => {
@@ -38,6 +41,10 @@ export default function MyProfile() {
         setDesignations(desigs)
       })
       .catch((err) => setLoadError(err.message))
+    collaborationsApi
+      .collaborators()
+      .then((list) => setPartners(list.filter((c) => !c.ended_at).map((c) => c.other)))
+      .catch(() => {})
   }, [])
 
   const flash = (text) => {
@@ -85,14 +92,27 @@ export default function MyProfile() {
   }
 
   // ---------- View / edit ----------
+  async function toggleHidden() {
+    setSavingVisibility(true)
+    try {
+      setProfile(await profilesApi.updateMine({ is_hidden: !profile.is_hidden }))
+      flash(profile.is_hidden ? 'Your profile is visible in search again.' : 'Your profile is now hidden from search.')
+    } catch (err) {
+      flash(err.message)
+    } finally {
+      setSavingVisibility(false)
+    }
+  }
+
   async function doDelete() {
     setDeleting(true)
     try {
       const { kind, item } = confirmDelete
       if (kind === 'publication') await profilesApi.deletePublication(item.id)
+      else if (kind === 'joint project') await profilesApi.leaveJointProject(item.id)
       else await profilesApi.deleteProject(item.id)
       await reload()
-      flash(`Deleted “${item.title}”.`)
+      flash(kind === 'joint project' ? `You left “${item.title}”.` : `Deleted “${item.title}”.`)
       setConfirmDelete(null)
     } catch (err) {
       flash(err.message)
@@ -110,6 +130,20 @@ export default function MyProfile() {
           You won't appear in search yet. Missing: {profile.missing_for_discovery.join(', ')}.
         </Alert>
       )}
+
+      <section className={`card visibility-card rise ${profile.is_hidden ? 'is-hidden' : ''}`}>
+        <div>
+          <h2 className="card-title">{profile.is_hidden ? 'Hidden from search' : 'Visible in search'}</h2>
+          <p className="muted small">
+            {profile.is_hidden
+              ? "Colleagues can't find you in search or suggestions, or send you new requests. Your collaborators can still see your profile."
+              : 'Colleagues can find you by your expertise and send you collaboration requests.'}
+          </p>
+        </div>
+        <button className="btn btn-ghost" disabled={savingVisibility} onClick={toggleHidden}>
+          {profile.is_hidden ? 'Show my profile' : 'Hide my profile'}
+        </button>
+      </section>
 
       {editing ? (
         <section className="card rise">
@@ -147,6 +181,10 @@ export default function MyProfile() {
         onEdit={(p) => setProjModal(p)}
         onDelete={(p) => setConfirmDelete({ kind: 'project', item: p })}
       />
+      <JointProjectsSection
+        projects={profile.joint_projects}
+        onLeave={(p) => setConfirmDelete({ kind: 'joint project', item: p })}
+      />
 
       {pubModal && (
         <PublicationModal
@@ -164,10 +202,14 @@ export default function MyProfile() {
       {projModal && (
         <ProjectModal
           initial={projModal}
+          partners={partners}
           onClose={() => setProjModal(null)}
-          onSave={async (data) => {
-            if (projModal.id) await profilesApi.updateProject(projModal.id, data)
-            else await profilesApi.addProject(data)
+          onSave={async (data, memberIds) => {
+            const saved = projModal.id
+              ? await profilesApi.updateProject(projModal.id, data)
+              : await profilesApi.addProject(data)
+            const before = (projModal.members ?? []).map((m) => m.user_id).sort().join()
+            if ([...memberIds].sort().join() !== before) await profilesApi.setProjectMembers(saved.id, memberIds)
             await reload()
             setProjModal(null)
             flash(projModal.id ? 'Project updated.' : 'Project added.')
@@ -177,18 +219,22 @@ export default function MyProfile() {
 
       <Modal
         open={confirmDelete !== null}
-        title={`Delete this ${confirmDelete?.kind ?? ''}?`}
+        title={confirmDelete?.kind === 'joint project' ? 'Leave this project?' : `Delete this ${confirmDelete?.kind ?? ''}?`}
         onClose={() => setConfirmDelete(null)}
         footer={
           <>
             <button className="btn btn-ghost" onClick={() => setConfirmDelete(null)}>Cancel</button>
             <button className="btn btn-danger" disabled={deleting} onClick={doDelete}>
-              {deleting ? 'Deleting…' : 'Delete'}
+              {confirmDelete?.kind === 'joint project' ? (deleting ? 'Leaving…' : 'Leave') : deleting ? 'Deleting…' : 'Delete'}
             </button>
           </>
         }
       >
-        <p className="muted">“{confirmDelete?.item.title}” will be removed from your profile.</p>
+        <p className="muted">
+          {confirmDelete?.kind === 'joint project'
+            ? `“${confirmDelete.item.title}” will no longer show on your profile. ${confirmDelete.item.owner.full_name} keeps the project.`
+            : `“${confirmDelete?.item.title}” will be removed from your profile.`}
+        </p>
       </Modal>
     </div>
   )

@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+
 // Read-only rendering of a profile. Pass the on* handlers to show edit controls (own profile).
 
 function initialsOf(name) {
@@ -115,6 +117,30 @@ export function PublicationsSection({ publications, onAdd, onEdit, onDelete }) {
   )
 }
 
+function ProjectDates({ p }) {
+  return (
+    <p className="muted small">
+      {p.status === 'ongoing' ? 'Ongoing' : 'Past'} · {monthYear(p.start_date)} –{' '}
+      {p.end_date ? monthYear(p.end_date) : 'present'}
+    </p>
+  )
+}
+
+function People({ label, people }) {
+  if (!people.length) return null
+  return (
+    <p className="small project-people">
+      <span className="muted">{label} </span>
+      {people.map((m, i) => (
+        <span key={m.user_id}>
+          {i > 0 && ', '}
+          <Link to={`/profiles/${m.user_id}`}>{m.full_name}</Link>
+        </span>
+      ))}
+    </p>
+  )
+}
+
 export function ProjectsSection({ projects, onAdd, onEdit, onDelete }) {
   return (
     <section className="card rise" style={{ '--i': 4 }}>
@@ -128,10 +154,8 @@ export function ProjectsSection({ projects, onAdd, onEdit, onDelete }) {
               <span className={`status-dot ${p.status}`} title={p.status === 'ongoing' ? 'Ongoing' : 'Past'} />
               <div className="item-body">
                 <h3>{p.title}</h3>
-                <p className="muted small">
-                  {p.status === 'ongoing' ? 'Ongoing' : 'Past'} · {monthYear(p.start_date)} –{' '}
-                  {p.end_date ? monthYear(p.end_date) : 'present'}
-                </p>
+                <ProjectDates p={p} />
+                <People label="With" people={p.members} />
                 {p.description && <p className="item-desc">{p.description}</p>}
               </div>
               <RowActions onEdit={onEdit && (() => onEdit(p))} onDelete={onDelete && (() => onDelete(p))} />
@@ -139,6 +163,34 @@ export function ProjectsSection({ projects, onAdd, onEdit, onDelete }) {
           ))}
         </ul>
       )}
+    </section>
+  )
+}
+
+// Projects other faculty own and list this person on. onLeave (own profile) shows a Leave button.
+export function JointProjectsSection({ projects, onLeave }) {
+  if (!projects.length) return null
+  return (
+    <section className="card rise" style={{ '--i': 5 }}>
+      <SectionHead title="Joint projects" count={projects.length} />
+      <ul className="item-list">
+        {projects.map((p) => (
+          <li key={p.id} className="item">
+            <span className={`status-dot ${p.status}`} title={p.status === 'ongoing' ? 'Ongoing' : 'Past'} />
+            <div className="item-body">
+              <h3>{p.title}</h3>
+              <ProjectDates p={p} />
+              <People label="Led by" people={[p.owner]} />
+              {p.description && <p className="item-desc">{p.description}</p>}
+            </div>
+            {onLeave && (
+              <div className="item-actions">
+                <button className="btn btn-danger-ghost btn-sm" onClick={() => onLeave(p)}>Leave</button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
     </section>
   )
 }
