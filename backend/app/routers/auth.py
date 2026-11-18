@@ -14,6 +14,7 @@ from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
     MessageResponse,
+    PreferencesUpdate,
     RegisterRequest,
     ResetPasswordRequest,
     TokenResponse,
@@ -153,6 +154,14 @@ def logout(
 
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
+    return user
+
+
+@router.patch("/me/preferences", response_model=UserOut)
+def update_preferences(body: PreferencesUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Email settings. The weekly digest goes to faculty only."""
+    user.email_digest = body.email_digest
+    db.commit()
     return user
 
 

@@ -65,6 +65,11 @@ class UserOut(BaseModel):
     full_name: str
     role: UserRole
     status: UserStatus
+    email_digest: bool
+
+
+class PreferencesUpdate(BaseModel):
+    email_digest: bool
 
 
 class TokenResponse(BaseModel):

@@ -122,3 +122,25 @@ def send_password_reset(to_email: str, name: str, link: str, minutes: int) -> bo
 def send_request_cancelled(to_email: str, name: str, message: str) -> bool:
     body = f"<p>Dear {escape(name)},</p><p>{escape(message)}</p>"
     return send_email(to_email, "A collaboration request was cancelled", _wrap(body))
+
+
+# --- Weekly digest ---
+
+def _list(items: list[str]) -> str:
+    return "<ul>" + "".join(f"<li>{escape(i)}</li>" for i in items) + "</ul>"
+
+
+def send_weekly_digest(to_email: str, name: str, pending: list[str], unread_messages: list[str],
+                       suggestions: list[str]) -> bool:
+    """pending: who is waiting for an answer; unread_messages: "Name (3)"; suggestions: "Name: shared keywords"."""
+    body = f"<p>Dear {escape(name)},</p><p>Here's what happened on the portal this week.</p>"
+    if pending:
+        body += f"<h3>Requests waiting for your answer ({len(pending)})</h3>" + _list(pending)
+    if unread_messages:
+        body += "<h3>Unread messages</h3>" + _list(unread_messages)
+    if suggestions:
+        body += "<h3>New colleagues who share your interests</h3>" + _list(suggestions)
+    settings_link = escape(f"{settings.FRONTEND_ORIGIN}/account")
+    body += (f'<p style="color:#888;font-size:12px">You get this weekly summary because it\'s on in your '
+             f'<a href="{settings_link}">account settings</a>. Turn it off there at any time.</p>')
+    return send_email(to_email, "Your weekly portal summary", _wrap(body))
