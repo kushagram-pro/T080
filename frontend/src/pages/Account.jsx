@@ -4,6 +4,41 @@ import { useAuth } from '../auth/AuthContext'
 import { ROLE_LABELS } from '../auth/roles'
 import { Alert, Field } from '../components/ui'
 
+function DigestSetting() {
+  const { user, updateUser } = useAuth()
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function toggle() {
+    setSaving(true)
+    setError(null)
+    try {
+      updateUser(await accountApi.setEmailDigest(!user.email_digest))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="card rise visibility-card">
+      <div>
+        <h2 className="card-title">Weekly email summary</h2>
+        <p className="muted small">
+          Once a week: requests waiting for you, unread messages and new colleagues who share your interests.
+          Nothing is sent in a week with nothing new.
+        </p>
+        <Alert>{error}</Alert>
+      </div>
+      <label className="switch">
+        <input type="checkbox" role="switch" checked={user.email_digest} disabled={saving} onChange={toggle} />
+        <span>{user.email_digest ? 'On' : 'Off'}</span>
+      </label>
+    </section>
+  )
+}
+
 export default function Account() {
   const { user } = useAuth()
   const [form, setForm] = useState({ current: '', next: '', confirm: '' })
@@ -70,6 +105,8 @@ export default function Account() {
           </div>
         </form>
       </section>
+
+      {user.role === 'faculty' && <DigestSetting />}
     </div>
   )
 }

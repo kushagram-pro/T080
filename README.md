@@ -28,10 +28,10 @@ Management get read-only reports.
 
 | Role | Can do |
 |---|---|
-| **Faculty** | Register (admin approval required), build a profile, search colleagues by expertise / department / designation, see suggested collaborators, send / accept / decline / withdraw collaboration requests, get notifications |
-| **Administrator** | Approve or reject registrations, manage accounts and roles, activate / deactivate, manage departments, send password reset links, admin dashboard, audit log |
-| **Research Admin** | Browse all active profiles, institute-wide collaboration activity report, any department's summary |
-| **Department Management** | Browse profiles, summary report for their own department |
+| **Faculty** | Register (admin approval required), build a profile, search colleagues by expertise, name, department or designation, see suggested collaborators, send / accept / decline / withdraw collaboration requests, message collaborators, end a collaboration, list collaborators on joint projects, hide their profile from search, get notifications and a weekly email summary |
+| **Administrator** | Approve or reject registrations, manage accounts and roles, activate / deactivate, manage departments, send password reset links, admin dashboard with 12-month trends, audit log with filters, reports with CSV download |
+| **Research Admin** | Browse all active profiles, institute-wide collaboration activity report, any department's summary, CSV downloads |
+| **Department Management** | Browse profiles, summary report for their own department, CSV download |
 
 Everyone can reset a forgotten password by email and change their password from the Account page.
 
@@ -57,7 +57,7 @@ T080/
 │   │   ├── security/        hashing, JWT, email
 │   │   └── dependencies/    "who is logged in" and role checks
 │   ├── alembic/             database migrations
-│   ├── scripts/             create_admin.py, seed_demo.py
+│   ├── scripts/             create_admin.py, seed_demo.py, send_digest.py
 │   └── tests/               pytest suite (tagged with SRS requirement IDs)
 ├── frontend/                React app (see frontend/README.md)
 └── docs/
@@ -156,6 +156,7 @@ All demo emails start with `demo.` (so they can never reach a real person), for 
 
 | Account | Role |
 |---|---|
+| `demo.admin@lnmiit.ac.in` | Administrator |
 | `demo.ananya.iyer@lnmiit.ac.in` | Faculty, CSE (has a pending request waiting) |
 | `demo.kavita.sharma@lnmiit.ac.in` | Faculty, CSE (two collaborators) |
 | `demo.research.office@lnmiit.ac.in` | Research Admin |
@@ -187,8 +188,9 @@ pytest
 pytest --req-report=../docs/test-traceability.md
 ```
 
-Current result: **135 tests, all passing; all 44 functional requirements (FR-001 to FR-044) and
-19 business rules (BR-001 to BR-019) covered.** See [docs/test-traceability.md](docs/test-traceability.md).
+Current result: **165 tests, all passing; all 44 functional requirements (FR-001 to FR-044) and
+19 business rules (BR-001 to BR-019) covered.** Features beyond the SRS are tagged `EXT-001` to
+`EXT-009` (see the top of `backend/tests/test_extensions.py`). See [docs/test-traceability.md](docs/test-traceability.md).
 
 ---
 
@@ -199,6 +201,11 @@ accepted / declined / cancelled, and password reset links.
 
 - **Local development:** leave `SENDGRID_API_KEY` empty. Emails are then written to the backend log
   instead of being sent, including password reset links, so the whole flow can be tested.
+- **Weekly digest:** `python -m scripts.send_digest` (from `backend/`) emails each faculty member who
+  has the digest on (the default; they can turn it off on the Account page) a summary of requests
+  waiting for them, unread messages and new colleagues who share their keywords. Each person gets at
+  most one a week and nothing in a week with nothing new, so it is safe to run daily. Schedule it with
+  Windows Task Scheduler (or cron). `--dry-run` only logs who would get one.
 - **Real sending:** create a SendGrid API key with "Mail Send" permission, verify the sender address
   in SendGrid, and set both `SENDGRID_API_KEY` and `SENDGRID_FROM_EMAIL`. If SendGrid rejects the key
   (`401 Unauthorized` in the backend log), the key is wrong or revoked.
@@ -261,5 +268,11 @@ Deliberate choices and additions, for the documentation:
 - **Rejected applicants** can register again with the same email (the same account returns to pending).
 - **Password reset** (not in the SRS) emails single-use links that expire after 30 minutes, only to
   approved, active accounts.
+- **Additions beyond the SRS:** search by name; messaging between collaborators (only the two of them,
+  read-only once ended); ending a collaboration (kept as history, the pair can collaborate again);
+  hiding a profile from faculty search and suggestions (collaborators and oversight roles still see
+  it); joint projects listed on every collaborator's profile; CSV download of both reports; audit log
+  filters by admin, account and date; 12-month trend charts on the admin dashboard; a weekly email
+  digest. New notification types: *new message* and *collaboration ended*.
 - The SRS traceability matrix (section 23) numbers FRs differently from section 13 (e.g. it splits
   FR-019). The code and tests use the **section 13** numbering.

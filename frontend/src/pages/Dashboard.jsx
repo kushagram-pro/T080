@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { adminApi, collaborationsApi, profilesApi, suggestionsApi } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import { ROLE_LABELS } from '../auth/roles'
+import { MonthColumns } from '../components/charts'
 import { spotlightHandlers, useCountUp } from '../components/effects'
 
 // Shortcuts to the main tools of each oversight role
@@ -113,15 +114,18 @@ export default function Dashboard() {
     suggestionsApi.list(6).then(setSuggestions).catch(() => setSuggestions(undefined))
     Promise.all([collaborationsApi.received(), collaborationsApi.collaborators()])
       .then(([received, collaborators]) =>
-        setCollab({ pending: received.filter((r) => r.status === 'pending').length, collaborators: collaborators.length }))
+        setCollab({ pending: received.filter((r) => r.status === 'pending').length, collaborators: collaborators.filter((c) => !c.ended_at).length }))
       .catch(() => {})
   }, [isFaculty])
+
+  const [trends, setTrends] = useState(null)
 
   useEffect(() => {
     if (!isAdmin) return
     let cancelled = false
     // FR-040
     adminApi.dashboard().then((d) => !cancelled && setAdminStats(d)).catch(() => {})
+    adminApi.trends().then((t) => !cancelled && setTrends(t)).catch(() => {})
     return () => {
       cancelled = true
     }
@@ -160,6 +164,24 @@ export default function Dashboard() {
           </>
         )}
       </section>
+      )}
+
+      {isAdmin && trends && (
+        <section>
+          <h2 className="section-title">Last 12 months</h2>
+          <div className="trend-grid">
+            {[
+              ['registrations', 'New faculty accounts'],
+              ['requests', 'Collaboration requests sent'],
+              ['collaborations', 'Collaborations started'],
+            ].map(([key, title], i) => (
+              <div key={key} className="card rise" style={{ '--i': i + 6 }}>
+                <h3 className="card-title">{title}</h3>
+                <MonthColumns months={trends[key]} label={`${title} per month`} />
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {isFaculty && <Suggestions items={suggestions} />}

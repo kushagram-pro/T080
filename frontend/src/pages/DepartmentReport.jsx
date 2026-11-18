@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { departmentsApi, reportsApi } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import { BarList } from '../components/charts'
+import { DownloadButton } from '../components/DownloadButton'
 import { Alert, Spinner } from '../components/ui'
 import { timeAgo } from '../utils/format'
 
@@ -45,13 +46,18 @@ export default function DepartmentReport() {
             {report && !loading ? `${report.institute} · expertise and collaboration activity` : 'Expertise and collaboration activity within one department.'}
           </p>
         </div>
-        {canChoose && (
-          <select className="select-inline" value={departmentId} aria-label="Department"
-            onChange={(e) => setParams(e.target.value ? { department_id: e.target.value } : {})}>
-            <option value="">Choose a department…</option>
-            {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-        )}
+        <div className="row-actions">
+          {canChoose && (
+            <select className="select-inline" value={departmentId} aria-label="Department"
+              onChange={(e) => setParams(e.target.value ? { department_id: e.target.value } : {})}>
+              <option value="">Choose a department…</option>
+              {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          )}
+          {report && !loading && (
+            <DownloadButton onDownload={() => reportsApi.downloadDepartment(canChoose ? departmentId : undefined)} />
+          )}
+        </div>
       </section>
 
       {needsChoice && (
@@ -64,7 +70,7 @@ export default function DepartmentReport() {
         <>
           <section className="grid-stats">
             {[
-              { label: 'Faculty with profiles', value: report.faculty.length, note: `${report.faculty.filter((f) => f.discoverable).length} complete enough to appear in search` },
+              { label: 'Faculty with profiles', value: report.faculty.length, note: `${report.faculty.filter((f) => f.discoverable).length} appear in search` },
               { label: 'Collaborations', value: report.collaborations.length, note: 'involving this department' },
               { label: 'Pending requests', value: report.requests.pending, note: `${report.requests.accepted} accepted so far` },
             ].map((t, i) => (
@@ -98,7 +104,7 @@ export default function DepartmentReport() {
                         <Link to={`/profiles/${f.user_id}`} className="strong">{f.full_name}</Link>
                         <div className="muted small">
                           {f.designation ?? 'No designation'}
-                          {!f.discoverable && ' · profile incomplete'}
+                          {f.hidden ? ' · hidden from search' : !f.discoverable && ' · profile incomplete'}
                         </div>
                       </td>
                       <td data-label="Expertise" className="small">{f.expertise.join(', ') || <span className="muted">—</span>}</td>

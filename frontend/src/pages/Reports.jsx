@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { reportsApi } from '../api/endpoints'
 import { BarList, MonthColumns } from '../components/charts'
+import { DownloadButton } from '../components/DownloadButton'
 import { Alert, Spinner } from '../components/ui'
 import { formatDate } from '../utils/format'
 
@@ -20,8 +21,12 @@ export default function Reports() {
   const r = report.requests
   const tiles = [
     // Counts faculty who have a profile; the admin dashboard's "registered faculty" also counts those without one
-    { label: 'Faculty with profiles', value: report.active_faculty, note: `${report.discoverable_profiles} complete enough to appear in search` },
-    { label: 'Collaborations', value: report.collaborations, note: `${report.cross_department_collaborations} across departments` },
+    { label: 'Faculty with profiles', value: report.active_faculty, note: `${report.discoverable_profiles} appear in search` },
+    {
+      label: 'Collaborations',
+      value: report.collaborations,
+      note: `${report.cross_department_collaborations} across departments · ${report.ended_collaborations} ended`,
+    },
     { label: 'Pending requests', value: r.pending, note: `${r.accepted + r.declined + r.withdrawn} answered or withdrawn` },
     {
       label: 'Acceptance rate',
@@ -37,6 +42,7 @@ export default function Reports() {
           <h1>Collaboration activity</h1>
           <p className="muted">Across all departments · generated {formatDate(report.generated_at)}</p>
         </div>
+        <DownloadButton onDownload={reportsApi.downloadActivity} />
       </section>
 
       <section className="grid-stats">
@@ -64,7 +70,7 @@ export default function Reports() {
               <tr>
                 <th>Department</th>
                 <th className="num">Faculty</th>
-                <th className="num">Complete profiles</th>
+                <th className="num">In search</th>
                 <th className="num">Collaborations</th>
                 <th className="num">Cross-department</th>
                 <th className="num">Pending requests</th>
@@ -77,7 +83,7 @@ export default function Reports() {
                     <Link to={`/reports/department?department_id=${d.department_id}`}>{d.department}</Link>
                   </td>
                   <td data-label="Faculty" className="num">{d.faculty}</td>
-                  <td data-label="Complete profiles" className="num">{d.discoverable_profiles}</td>
+                  <td data-label="In search" className="num">{d.discoverable_profiles}</td>
                   <td data-label="Collaborations" className="num">{d.collaborations}</td>
                   <td data-label="Cross-department" className="num">{d.cross_department}</td>
                   <td data-label="Pending requests" className="num">{d.pending_requests}</td>
