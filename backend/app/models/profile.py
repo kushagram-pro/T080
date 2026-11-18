@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime
 from typing import TYPE_CHECKING
-from sqlalchemy import String, Text, Integer, ForeignKey, Date, Enum, DateTime, Index, CheckConstraint, func
+from sqlalchemy import Boolean, String, Text, Integer, ForeignKey, Date, Enum, DateTime, Index, CheckConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -35,6 +35,8 @@ class FacultyProfile(Base):
     full_name:     Mapped[str]      = mapped_column(String(150), nullable=False)
     designation:   Mapped[str | None] = mapped_column(String(150), nullable=True)
     bio:           Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The owner can hide the profile from faculty search and suggestions for a while
+    is_hidden:     Mapped[bool]     = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     created_at:    Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at:    Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -44,6 +46,10 @@ class FacultyProfile(Base):
     research_interests: Mapped[list["ResearchInterest"]]  = relationship("ResearchInterest", back_populates="profile", cascade="all, delete-orphan")
     projects:           Mapped[list["Project"]]       = relationship("Project", back_populates="profile", cascade="all, delete-orphan")
     publications:       Mapped[list["Publication"]]   = relationship("Publication", back_populates="profile", cascade="all, delete-orphan")
+
+    def is_searchable(self) -> bool:
+        """Shows up in faculty search: complete (BR-005) and not hidden by its owner."""
+        return self.is_discoverable() and not self.is_hidden
 
     def is_discoverable(self) -> bool:
         return (
@@ -100,6 +106,21 @@ class Project(Base):
     )
 
     profile: Mapped["FacultyProfile"] = relationship("FacultyProfile", back_populates="projects")
+    members: Mapped[list["ProjectMember"]] = relationship(
+        "ProjectMember", back_populates="project", cascade="all, delete-orphan", passive_deletes=True,
+    )
+
+
+class ProjectMember(Base):
+    """A collaborator the project's owner has listed on a joint project; it shows on their profile too."""
+    __tablename__ = "project_members"
+
+    project_id: Mapped[int]      = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    user_id:    Mapped[int]      = mapped_column(ForeignKey("users.id"), primary_key=True, index=True)
+    added_at:   Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project: Mapped["Project"] = relationship("Project", back_populates="members")
+    user:    Mapped["User"]    = relationship("User")
 
 class Publication(Base):
     __tablename__ = "publications"

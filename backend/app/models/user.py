@@ -34,6 +34,9 @@ class User(Base):
     # Department Management users are scoped to one department (SRS 11.4 / FR-044).
     # Faculty keep their department on their profile instead.
     department_id:    Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True, index=True)
+    # Weekly email digest (faculty): on unless they turn it off; digest_sent_at stops repeats
+    email_digest:     Mapped[bool]     = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    digest_sent_at:   Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at:       Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at:       Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

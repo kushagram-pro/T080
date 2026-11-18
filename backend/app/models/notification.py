@@ -16,6 +16,9 @@ class NotificationType(str, enum.Enum):
     request_accepted  = "request_accepted"
     request_declined  = "request_declined"
     request_cancelled = "request_cancelled"
+    # Added with collaboration messaging; request_id points at the request that started the collaboration
+    message_received    = "message_received"
+    collaboration_ended = "collaboration_ended"
 
 class Notification(Base):
     __tablename__ = "notifications"

@@ -2,9 +2,9 @@ from app.models.user import User, UserRole, UserStatus
 from app.models.profile import (
     Department, FacultyProfile,
     ExpertiseKeyword, ResearchInterest,
-    Project, Publication, ProjectStatus
+    Project, ProjectMember, Publication, ProjectStatus
 )
-from app.models.collaboration import CollaborationRequest, Collaboration, RequestStatus
+from app.models.collaboration import CollaborationRequest, Collaboration, CollaborationMessage, RequestStatus
 from app.models.notification import Notification, NotificationType
 from app.models.audit import AuditLog, AuditAction
 
