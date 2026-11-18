@@ -22,8 +22,11 @@ def ordered_pair(a: int, b: int) -> tuple[int, int]:
 
 
 def find_collaboration(db: Session, a: int, b: int) -> Collaboration | None:
+    """The ongoing collaboration between two people (ended ones are history)."""
     x, y = ordered_pair(a, b)
-    return db.scalar(select(Collaboration).where(Collaboration.faculty_a == x, Collaboration.faculty_b == y))
+    return db.scalar(select(Collaboration).where(
+        Collaboration.faculty_a == x, Collaboration.faculty_b == y, Collaboration.ended_at.is_(None)
+    ))
 
 
 def find_pending(db: Session, a: int, b: int) -> CollaborationRequest | None:
@@ -67,8 +70,8 @@ def parties(db: Session, user_ids: set[int]) -> dict[int, Party]:
 def notify(db: Session, recipient_id: int, type_: NotificationType, message: str, request_id: int) -> None:
     """In-app notification, committed together with the action that caused it.
 
-    BR-018: request received / accepted / declined, plus request_cancelled (deactivation).
-    BR-019: only the person directly involved.
+    BR-018: request received / accepted / declined, plus request_cancelled (deactivation),
+    message_received and collaboration_ended. BR-019: only the person directly involved.
     """
     db.add(Notification(recipient_id=recipient_id, type=type_, message=message, request_id=request_id))
 

@@ -34,7 +34,8 @@ def visible_profiles(viewer: User) -> Select:
         .where(User.status == UserStatus.active, User.role == UserRole.faculty, User.id != viewer.id)
     )
     if viewer.role not in OVERSIGHT_ROLES:
-        q = q.where(is_discoverable_sql())
+        # Faculty see complete profiles whose owners haven't hidden them
+        q = q.where(is_discoverable_sql(), FacultyProfile.is_hidden.is_(False))
     return q
 
 
@@ -55,10 +56,11 @@ def all_keywords_subquery():
 
 
 def collaborator_ids(db, user_id: int) -> set[int]:
-    """Users with an accepted collaboration with `user_id`, either direction (BR-014 / BR-017)."""
+    """Users with an ongoing collaboration with `user_id`, either direction (BR-014 / BR-017)."""
     rows = db.execute(
         select(Collaboration.faculty_a, Collaboration.faculty_b).where(
-            or_(Collaboration.faculty_a == user_id, Collaboration.faculty_b == user_id)
+            or_(Collaboration.faculty_a == user_id, Collaboration.faculty_b == user_id),
+            Collaboration.ended_at.is_(None),
         )
     ).all()
     return {b if a == user_id else a for a, b in rows}

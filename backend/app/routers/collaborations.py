@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -9,14 +9,24 @@ from app.database import get_db
 from app.dependencies.auth import require_faculty
 from app.models import (
     Collaboration,
+    CollaborationMessage,
     CollaborationRequest,
+    Notification,
     NotificationType,
     RequestStatus,
     User,
     UserRole,
     UserStatus,
 )
-from app.schemas.collaboration import CollaboratorOut, RelationshipOut, RequestCreate, RequestOut
+from app.schemas.collaboration import (
+    ChatMessageIn,
+    ChatMessageOut,
+    ChatThreadOut,
+    CollaboratorOut,
+    RelationshipOut,
+    RequestCreate,
+    RequestOut,
+)
 from app.security import email
 from app.services.collaboration import (
     display_name,
@@ -71,6 +81,9 @@ def send_request(
         _conflict("This faculty member's account is not active, so the request can't be sent")  # BR-013
 
     recipient_profile = load_profile(db, user_id=recipient.id)
+    if recipient_profile is not None and recipient_profile.is_hidden:
+        # Hidden from search by its owner: treat it as not there, like the profile page does
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Faculty member not found")
     if recipient_profile is None or not recipient_profile.is_discoverable():
         _conflict("This faculty member hasn't completed their profile yet")  # AC-003
 
@@ -216,30 +229,177 @@ def received_requests(
 
 @router.get("", response_model=list[CollaboratorOut])
 def my_collaborators(db: Session = Depends(get_db), user: User = Depends(require_faculty)):
+    """Ongoing collaborations first, then ended ones (kept so their messages can still be read)."""
     rows = db.scalars(
         select(Collaboration)
         .where(or_(Collaboration.faculty_a == user.id, Collaboration.faculty_b == user.id))
-        .order_by(Collaboration.created_at.desc())
+        .order_by(Collaboration.ended_at.is_not(None), Collaboration.created_at.desc())
     ).all()
-    other_ids = {c.faculty_b if c.faculty_a == user.id else c.faculty_a for c in rows}
+    other_ids = {c.other(user.id) for c in rows}
     # Deactivated colleagues are hidden, like everywhere else (BR-004)
     active = set(db.scalars(select(User.id).where(User.id.in_(other_ids), User.status == UserStatus.active)))
     people = parties(db, active)
-    out = []
-    for c in rows:
-        other = c.faculty_b if c.faculty_a == user.id else c.faculty_a
-        if other in active:
-            out.append(CollaboratorOut(collaboration_id=c.id, other=people[other], since=c.created_at))
-    return out
+    unread = dict(db.execute(
+        select(CollaborationMessage.collaboration_id, func.count())
+        .where(
+            CollaborationMessage.collaboration_id.in_([c.id for c in rows]),
+            CollaborationMessage.sender_id != user.id,
+            CollaborationMessage.read_at.is_(None),
+        )
+        .group_by(CollaborationMessage.collaboration_id)
+    ).all()) if rows else {}
+    return [
+        CollaboratorOut(
+            collaboration_id=c.id,
+            request_id=c.request_id,
+            other=people[c.other(user.id)],
+            since=c.created_at,
+            ended_at=c.ended_at,
+            ended_by_me=c.ended_by == user.id,
+            unread_messages=unread.get(c.id, 0),
+        )
+        for c in rows
+        if c.other(user.id) in active
+    ]
 
 
 @router.get("/status/{user_id}", response_model=RelationshipOut)
 def relationship(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_faculty)):
     """What the profile page should show for this person."""
-    if find_collaboration(db, user.id, user_id):
-        return RelationshipOut(state="collaborators")
+    collab = find_collaboration(db, user.id, user_id)
+    if collab:
+        return RelationshipOut(state="collaborators", collaboration_id=collab.id, request_id=collab.request_id)
     pending = find_pending(db, user.id, user_id)
     if pending is not None:
         state = "pending_sent" if pending.sender_id == user.id else "pending_received"
         return RelationshipOut(state=state, request_id=pending.id)
     return RelationshipOut(state="none")
+
+
+# ---------- End a collaboration ----------
+
+def _my_collaboration(db: Session, collaboration_id: int, user: User, lock: bool = False) -> Collaboration:
+    q = select(Collaboration).where(Collaboration.id == collaboration_id)
+    collab = db.scalar(q.with_for_update() if lock else q)
+    if collab is None or user.id not in (collab.faculty_a, collab.faculty_b):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collaboration not found")
+    return collab
+
+
+@router.post("/{collaboration_id}/end", response_model=CollaboratorOut)
+def end_collaboration(collaboration_id: int, db: Session = Depends(get_db), user: User = Depends(require_faculty)):
+    """Either person can end it. Messages stay readable; they can collaborate again later."""
+    collab = _my_collaboration(db, collaboration_id, user, lock=True)
+    if collab.ended_at is not None:
+        _conflict("This collaboration has already ended")
+
+    collab.ended_at = datetime.utcnow()
+    collab.ended_by = user.id
+    other = db.get(User, collab.other(user.id))
+    if other.status == UserStatus.active:
+        notify(db, other.id, NotificationType.collaboration_ended,
+               f"{display_name(user)} ended your collaboration.", collab.request_id)
+    db.commit()
+    return CollaboratorOut(
+        collaboration_id=collab.id, request_id=collab.request_id, other=parties(db, {other.id})[other.id],
+        since=collab.created_at, ended_at=collab.ended_at, ended_by_me=True, unread_messages=0,
+    )
+
+
+# ---------- Messages ----------
+
+def _thread(db: Session, collab: Collaboration, user: User, messages, has_more: bool) -> ChatThreadOut:
+    other_id = collab.other(user.id)
+    other = db.get(User, other_id)
+    return ChatThreadOut(
+        collaboration_id=collab.id,
+        other=parties(db, {other_id})[other_id],
+        ended_at=collab.ended_at,
+        can_send=collab.ended_at is None and other.status == UserStatus.active,
+        messages=[
+            ChatMessageOut(id=m.id, sender_id=m.sender_id, mine=m.sender_id == user.id,
+                           body=m.body, created_at=m.created_at, read_at=m.read_at)
+            for m in messages
+        ],
+        has_more=has_more,
+    )
+
+
+@router.get("/{collaboration_id}/messages", response_model=ChatThreadOut)
+def list_messages(
+    collaboration_id: int,
+    before_id: int | None = Query(None, description="Load messages older than this one"),
+    after_id: int | None = Query(None, description="Only messages newer than this one (polling)"),
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_faculty),
+):
+    collab = _my_collaboration(db, collaboration_id, user)
+    q = select(CollaborationMessage).where(CollaborationMessage.collaboration_id == collab.id)
+    if before_id is not None:
+        q = q.where(CollaborationMessage.id < before_id)
+    if after_id is not None:
+        q = q.where(CollaborationMessage.id > after_id)
+    rows = db.scalars(q.order_by(CollaborationMessage.id.desc()).limit(limit + 1)).all()
+    return _thread(db, collab, user, list(reversed(rows[:limit])), has_more=len(rows) > limit)
+
+
+@router.post("/{collaboration_id}/messages", response_model=ChatMessageOut, status_code=status.HTTP_201_CREATED)
+def send_message(
+    collaboration_id: int,
+    body: ChatMessageIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_faculty),
+):
+    collab = _my_collaboration(db, collaboration_id, user)
+    if collab.ended_at is not None:
+        _conflict("This collaboration has ended, so new messages can't be sent")
+    other = db.get(User, collab.other(user.id))
+    if other.status != UserStatus.active:
+        _conflict(f"{display_name(other)}'s account is no longer active")
+
+    msg = CollaborationMessage(collaboration_id=collab.id, sender_id=user.id, body=body.body)
+    db.add(msg)
+    # One unread "new messages" notification per conversation, refreshed rather than repeated
+    me = display_name(user)
+    existing = db.scalar(select(Notification).where(
+        Notification.recipient_id == other.id,
+        Notification.type == NotificationType.message_received,
+        Notification.request_id == collab.request_id,
+        Notification.is_read.is_(False),
+    ))
+    if existing:
+        existing.message = f"New messages from {me}."
+        existing.created_at = datetime.utcnow()
+    else:
+        notify(db, other.id, NotificationType.message_received, f"{me} sent you a message.", collab.request_id)
+    db.commit()
+    return ChatMessageOut(id=msg.id, sender_id=user.id, mine=True, body=msg.body,
+                          created_at=msg.created_at, read_at=None)
+
+
+@router.post("/{collaboration_id}/messages/read", status_code=status.HTTP_204_NO_CONTENT)
+def mark_messages_read(collaboration_id: int, db: Session = Depends(get_db), user: User = Depends(require_faculty)):
+    """The viewer has seen the conversation: its unread messages and its notification become read."""
+    collab = _my_collaboration(db, collaboration_id, user)
+    now = datetime.utcnow()
+    db.execute(
+        update(CollaborationMessage)
+        .where(
+            CollaborationMessage.collaboration_id == collab.id,
+            CollaborationMessage.sender_id != user.id,
+            CollaborationMessage.read_at.is_(None),
+        )
+        .values(read_at=now)
+    )
+    db.execute(
+        update(Notification)
+        .where(
+            Notification.recipient_id == user.id,
+            Notification.type == NotificationType.message_received,
+            Notification.request_id == collab.request_id,
+            Notification.is_read.is_(False),
+        )
+        .values(is_read=True)
+    )
+    db.commit()
