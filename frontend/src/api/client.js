@@ -68,6 +68,31 @@ function toApiError(status, data) {
   return new ApiError(status, 'Something went wrong. Please try again.')
 }
 
+// Download a file from an authenticated endpoint (e.g. a CSV report) and save it in the browser
+export async function download(path, fallbackName, retry = true) {
+  let res
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      credentials: 'include',
+    })
+  } catch {
+    throw new ApiError(0, "Can't reach the server. Is the backend running?")
+  }
+  if (res.status === 401 && retry && (await refreshSession())) return download(path, fallbackName, false)
+  if (!res.ok) throw toApiError(res.status, await res.json().catch(() => null))
+
+  const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? fallbackName
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export async function api(path, { method = 'GET', body, auth = true, retry = true } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'

@@ -38,7 +38,10 @@ export function AuthProvider({ children }) {
     setUser(null)
   }, [])
 
-  const value = useMemo(() => ({ user, ready, login, logout }), [user, ready, login, logout])
+  // After the account changes on the server (e.g. email preferences), keep the copy here in step
+  const updateUser = useCallback((next) => setUser(next), [])
+
+  const value = useMemo(() => ({ user, ready, login, logout, updateUser }), [user, ready, login, logout, updateUser])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 

@@ -1,6 +1,9 @@
-import { api } from './client'
+import { api, download } from './client'
 
 // One function per backend endpoint, so pages never build URLs themselves.
+
+const qs = (params) =>
+  new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString()
 
 export const authApi = {
   register: (data) => api('/auth/register', { method: 'POST', body: data, auth: false }),
@@ -39,10 +42,13 @@ export const profilesApi = {
   addProject: (data) => api('/profiles/me/projects', { method: 'POST', body: data }),
   updateProject: (id, data) => api(`/profiles/me/projects/${id}`, { method: 'PUT', body: data }),
   deleteProject: (id) => api(`/profiles/me/projects/${id}`, { method: 'DELETE' }),
+  setProjectMembers: (id, userIds) =>
+    api(`/profiles/me/projects/${id}/members`, { method: 'PUT', body: { user_ids: userIds } }),
+  leaveJointProject: (id) => api(`/profiles/me/joint-projects/${id}`, { method: 'DELETE' }),
 }
 
 export const searchApi = {
-  // params: { q, department_id, designation, page, page_size }; empty values are dropped
+  // params: { q, name, department_id, designation, page, page_size }; empty values are dropped
   search: (params) => {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''))
     return api(`/search?${qs}`)
@@ -63,6 +69,12 @@ export const collaborationsApi = {
   received: () => api('/collaborations/requests/received'),
   collaborators: () => api('/collaborations'),
   relationship: (userId) => api(`/collaborations/status/${userId}`),
+  end: (collaborationId) => api(`/collaborations/${collaborationId}/end`, { method: 'POST' }),
+  // params: { before_id } for older messages, { after_id } to poll for newer ones
+  messages: (collaborationId, params = {}) => api(`/collaborations/${collaborationId}/messages?${qs(params)}`),
+  sendMessage: (collaborationId, body) =>
+    api(`/collaborations/${collaborationId}/messages`, { method: 'POST', body: { body } }),
+  markMessagesRead: (collaborationId) => api(`/collaborations/${collaborationId}/messages/read`, { method: 'POST' }),
 }
 
 export const notificationsApi = {
@@ -76,11 +88,9 @@ export const notificationsApi = {
 export const NOTIFICATIONS_CHANGED = 'fcn:notifications-changed'
 export const announceNotificationsChanged = () => window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED))
 
-const qs = (params) =>
-  new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString()
-
 export const adminApi = {
   dashboard: () => api('/admin/dashboard'),
+  trends: () => api('/admin/dashboard/trends'),
   users: (params) => api(`/admin/users?${qs(params)}`),
   createUser: (data) => api('/admin/users', { method: 'POST', body: data }),
   updateUser: (id, data) => api(`/admin/users/${id}`, { method: 'PATCH', body: data }),
@@ -93,9 +103,13 @@ export const adminApi = {
 export const reportsApi = {
   activity: () => api('/reports/activity'),
   department: (departmentId) => api(`/reports/department?${qs({ department_id: departmentId })}`),
+  downloadActivity: () => download('/reports/activity.csv', 'collaboration-activity.csv'),
+  downloadDepartment: (departmentId) =>
+    download(`/reports/department.csv?${qs({ department_id: departmentId })}`, 'department-report.csv'),
 }
 
 export const accountApi = {
+  setEmailDigest: (on) => api('/auth/me/preferences', { method: 'PATCH', body: { email_digest: on } }),
   changePassword: (current, next) =>
     api('/auth/change-password', { method: 'POST', body: { current_password: current, new_password: next } }),
 }

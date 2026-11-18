@@ -20,7 +20,7 @@ export function Alert({ kind = 'error', children }) {
 }
 
 // Accessible modal dialog built on the native <dialog> element
-export function Modal({ open, title, onClose, children, footer }) {
+export function Modal({ open, title, onClose, children, footer, wide = false }) {
   const ref = useRef(null)
   const titleId = useId()
 
@@ -34,7 +34,7 @@ export function Modal({ open, title, onClose, children, footer }) {
   return (
     <dialog
       ref={ref}
-      className="modal"
+      className={wide ? 'modal modal-wide' : 'modal'}
       aria-labelledby={titleId}
       onCancel={(e) => {
         e.preventDefault()

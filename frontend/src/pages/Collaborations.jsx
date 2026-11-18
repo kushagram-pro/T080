@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { announceNotificationsChanged, collaborationsApi } from '../api/endpoints'
+import { ChatPanel } from '../components/collab/ChatPanel'
 import { Alert, Modal, Spinner } from '../components/ui'
 import { timeAgo } from '../utils/format'
 
@@ -45,6 +46,14 @@ export default function Collaborations() {
   const [notice, setNotice] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [confirm, setConfirm] = useState(null) // { kind: 'decline'|'withdraw', req }
+  const [confirmEnd, setConfirmEnd] = useState(null) // collaboration
+  const [ending, setEnding] = useState(false)
+
+  // ?chat=REQUEST_ID (from a message notification or a profile page) opens that conversation
+  const chatRequestId = Number(params.get('chat')) || null
+  const chatWith = chatRequestId ? data.collaborators?.find((c) => c.request_id === chatRequestId) : null
+  const openChat = (c) => setParams({ tab: 'collaborators', chat: c.request_id })
+  const closeChat = () => setParams({ tab: 'collaborators' })
 
   const load = () =>
     Promise.all([collaborationsApi.received(), collaborationsApi.sent(), collaborationsApi.collaborators()])
@@ -80,11 +89,29 @@ export default function Collaborations() {
     }
   }
 
+  async function endCollaboration() {
+    setEnding(true)
+    setError(null)
+    try {
+      await collaborationsApi.end(confirmEnd.collaboration_id)
+      await load()
+      setNotice(`Your collaboration with ${confirmEnd.other.full_name} has ended. Your messages are kept below.`)
+    } catch (err) {
+      setError(err.message)
+      await load()
+    } finally {
+      setEnding(false)
+      setConfirmEnd(null)
+    }
+  }
+
+  const ongoing = data.collaborators?.filter((c) => !c.ended_at) ?? []
+  const past = data.collaborators?.filter((c) => c.ended_at) ?? []
   const pendingReceived = data.received?.filter((r) => r.status === 'pending').length ?? 0
   const counts = {
     received: pendingReceived,
     sent: data.sent?.filter((r) => r.status === 'pending').length ?? 0,
-    collaborators: data.collaborators?.length ?? 0,
+    collaborators: ongoing.length,
   }
 
   // Pending first, then newest
@@ -173,16 +200,75 @@ export default function Collaborations() {
         </ul>
       )}
 
-      {list?.length > 0 && tab === 'collaborators' && (
+      {tab === 'collaborators' && ongoing.length > 0 && (
         <ul className="grid-cards collaborator-grid" key={tab}>
-          {list.map((c, i) => (
+          {ongoing.map((c, i) => (
             <li key={c.collaboration_id} className="card collaborator-card rise" style={{ '--i': i }}>
               <Person other={c.other} />
               <span className="muted small">Collaborating since {timeAgo(c.since)}</span>
+              <div className="row-actions">
+                <button className="btn btn-primary btn-sm" onClick={() => openChat(c)}>
+                  Messages
+                  {c.unread_messages > 0 && (
+                    <span className="unread-badge" aria-label={`${c.unread_messages} unread`}>{c.unread_messages}</span>
+                  )}
+                </button>
+                <button className="btn btn-danger-ghost btn-sm" onClick={() => setConfirmEnd(c)}>End</button>
+              </div>
             </li>
           ))}
         </ul>
       )}
+
+      {tab === 'collaborators' && list?.length > 0 && ongoing.length === 0 && (
+        <div className="card empty-state">
+          <h2>No current collaborators</h2>
+          <p className="muted">Your past collaborations are listed below.</p>
+        </div>
+      )}
+
+      {tab === 'collaborators' && past.length > 0 && (
+        <section className="stack">
+          <h2 className="section-title">Past collaborations</h2>
+          <ul className="grid-cards collaborator-grid">
+            {past.map((c, i) => (
+              <li key={c.collaboration_id} className="card collaborator-card is-ended rise" style={{ '--i': i }}>
+                <Person other={c.other} />
+                <span className="muted small">
+                  Ended {timeAgo(c.ended_at)}{c.ended_by_me ? ' by you' : ''}
+                </span>
+                <div className="row-actions">
+                  <button className="btn btn-ghost btn-sm" onClick={() => openChat(c)}>
+                    View messages
+                    {c.unread_messages > 0 && <span className="unread-badge">{c.unread_messages}</span>}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {chatWith && <ChatPanel collaboration={chatWith} onClose={closeChat} onRead={load} />}
+
+      <Modal
+        open={confirmEnd !== null}
+        title={`End your collaboration with ${confirmEnd?.other.full_name}?`}
+        onClose={() => setConfirmEnd(null)}
+        footer={
+          <>
+            <button className="btn btn-ghost" onClick={() => setConfirmEnd(null)}>Cancel</button>
+            <button className="btn btn-danger" disabled={ending} onClick={endCollaboration}>
+              {ending ? 'Ending…' : 'End collaboration'}
+            </button>
+          </>
+        }
+      >
+        <p className="muted">
+          {confirmEnd?.other.full_name} will be notified. Your messages stay readable, but no new ones can be sent.
+          Either of you can send a new collaboration request later.
+        </p>
+      </Modal>
 
       <Modal
         open={confirm !== null}

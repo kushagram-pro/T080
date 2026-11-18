@@ -103,13 +103,20 @@ export function RequestActions({ userId, name }) {
         )}
 
         {rel.state === 'collaborators' && (
-          <div className="collab-badge">
-            <span className="collab-check" aria-hidden="true">✓</span>
-            <div>
-              <h3>Collaborating</h3>
-              <p className="muted small">You and {name} are collaborators.</p>
+          <>
+            <div className="collab-badge">
+              <span className="collab-check" aria-hidden="true">✓</span>
+              <div>
+                <h3>Collaborating</h3>
+                <p className="muted small">You and {name} are collaborators.</p>
+              </div>
             </div>
-          </div>
+            {rel.request_id && (
+              <Link to={`/collaborations?tab=collaborators&chat=${rel.request_id}`} className="btn btn-primary">
+                Message
+              </Link>
+            )}
+          </>
         )}
       </div>
 
