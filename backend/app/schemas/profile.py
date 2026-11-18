@@ -104,6 +104,7 @@ class ProfileUpdate(BaseModel):
     bio: str | None = Field(default=None, max_length=BIO_MAX_LEN)  # send null or "" to clear
     expertise_keywords: list[str] | None = None
     research_interests: list[str] | None = None
+    is_hidden: bool | None = None  # hide from faculty search and suggestions
 
     @field_validator("full_name")
     @classmethod
@@ -143,7 +144,7 @@ class ProfileUpdate(BaseModel):
     @model_validator(mode="after")
     def not_null_where_required(self):
         # Explicit null is only meaningful for bio
-        for f in ("full_name", "department_id", "designation", "expertise_keywords", "research_interests"):
+        for f in ("full_name", "department_id", "designation", "expertise_keywords", "research_interests", "is_hidden"):
             if f in self.model_fields_set and getattr(self, f) is None:
                 raise ValueError(f"{f} can't be null")
         return self
@@ -241,6 +242,11 @@ class PublicationOut(BaseModel):
     doi_url: str | None
 
 
+class PersonBrief(BaseModel):
+    user_id: int
+    full_name: str
+
+
 class ProjectOut(BaseModel):
     id: int
     title: str
@@ -248,6 +254,19 @@ class ProjectOut(BaseModel):
     status: ProjectStatus
     start_date: date
     end_date: date | None
+    members: list[PersonBrief] = []  # collaborators listed on a joint project
+
+
+class JointProjectOut(ProjectOut):
+    """A project someone else owns and lists this person on."""
+    owner: PersonBrief
+
+
+MAX_PROJECT_MEMBERS = 10
+
+
+class ProjectMembersIn(BaseModel):
+    user_ids: list[int] = Field(max_length=MAX_PROJECT_MEMBERS)
 
 
 class ProfileOut(BaseModel):
@@ -261,6 +280,7 @@ class ProfileOut(BaseModel):
     research_interests: list[str]
     publications: list[PublicationOut]
     projects: list[ProjectOut]
+    joint_projects: list[JointProjectOut]
     updated_at: datetime
 
 
@@ -268,3 +288,4 @@ class OwnProfileOut(ProfileOut):
     # Lets the owner see why they might not appear in search (BR-005)
     is_discoverable: bool
     missing_for_discovery: list[str]
+    is_hidden: bool

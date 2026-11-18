@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.dependencies.auth import get_current_user, require_faculty
@@ -10,6 +10,7 @@ from app.models import (
     ExpertiseKeyword,
     FacultyProfile,
     Project,
+    ProjectMember,
     Publication,
     ResearchInterest,
     User,
@@ -23,11 +24,21 @@ from app.schemas.profile import (
     ProfileOut,
     ProfileUpdate,
     ProjectIn,
+    ProjectMembersIn,
     ProjectOut,
     PublicationIn,
     PublicationOut,
 )
-from app.services.profiles import load_profile, sync_keywords, to_own_profile_out, to_profile_out, touch
+from app.services.collaboration import find_collaboration, find_pending
+from app.services.discovery import collaborator_ids
+from app.services.profiles import (
+    load_profile,
+    project_dict,
+    sync_keywords,
+    to_own_profile_out,
+    to_profile_out,
+    touch,
+)
 
 router = APIRouter(prefix="/profiles", tags=["profiles"])
 
@@ -69,7 +80,7 @@ def list_designations(_user: User = Depends(get_current_user)):
 @router.get("/me", response_model=OwnProfileOut)
 def get_my_profile(db: Session = Depends(get_db), user: User = Depends(require_faculty)):
     """FR-016."""
-    return to_own_profile_out(_own_profile(db, user))
+    return to_own_profile_out(db, _own_profile(db, user))
 
 
 @router.post("/me", response_model=OwnProfileOut, status_code=status.HTTP_201_CREATED)
@@ -96,7 +107,7 @@ def create_my_profile(body: ProfileCreate, db: Session = Depends(get_db), user: 
     except IntegrityError:  # double-submit race on user_id
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="You already have a profile")
-    return to_own_profile_out(load_profile(db, user_id=user.id))
+    return to_own_profile_out(db, load_profile(db, user_id=user.id))
 
 
 @router.patch("/me", response_model=OwnProfileOut)
@@ -121,11 +132,13 @@ def update_my_profile(body: ProfileUpdate, db: Session = Depends(get_db), user: 
     if "research_interests" in sent:
         sync_keywords(profile.research_interests, body.research_interests, "topic",
                       lambda t: ResearchInterest(topic=t))
+    if "is_hidden" in sent:
+        profile.is_hidden = body.is_hidden
 
     touch(profile)
     db.commit()
     db.expire_all()
-    return to_own_profile_out(load_profile(db, user_id=user.id))
+    return to_own_profile_out(db, load_profile(db, user_id=user.id))
 
 
 # ---------- Publications (FR-012 / FR-013) ----------
@@ -168,7 +181,7 @@ def add_project(body: ProjectIn, db: Session = Depends(get_db), user: User = Dep
     db.add(proj)
     touch(profile)
     db.commit()
-    return ProjectOut(id=proj.id, **body.model_dump())
+    return ProjectOut(id=proj.id, **body.model_dump(), members=[])
 
 
 @router.put("/me/projects/{project_id}", response_model=ProjectOut)
@@ -179,7 +192,7 @@ def edit_project(project_id: int, body: ProjectIn, db: Session = Depends(get_db)
         setattr(proj, k, v)
     touch(profile)
     db.commit()
-    return ProjectOut(id=proj.id, **body.model_dump())
+    return _project_out(db, proj.id)
 
 
 @router.delete("/me/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -187,6 +200,60 @@ def delete_project(project_id: int, db: Session = Depends(get_db), user: User = 
     profile = _own_profile(db, user)
     db.delete(_own_row(db, Project, project_id, profile, "Project"))
     touch(profile)
+    db.commit()
+
+
+# ---------- Joint projects ----------
+
+def _project_out(db: Session, project_id: int) -> ProjectOut:
+    proj = db.scalar(
+        select(Project).where(Project.id == project_id)
+        .options(selectinload(Project.members).selectinload(ProjectMember.user))
+    )
+    return ProjectOut(**project_dict(proj))
+
+
+@router.put("/me/projects/{project_id}/members", response_model=ProjectOut)
+def set_project_members(
+    project_id: int, body: ProjectMembersIn, db: Session = Depends(get_db), user: User = Depends(require_faculty)
+):
+    """List collaborators on one of your projects; it then shows on their profiles too.
+
+    Only people you're currently collaborating with can be added. Sending the full list
+    replaces the old one (an empty list makes it a solo project again).
+    """
+    profile = _own_profile(db, user)
+    proj = _own_row(db, Project, project_id, profile, "Project")
+    wanted = list(dict.fromkeys(body.user_ids))  # de-duplicate, keep order
+    partners = collaborator_ids(db, user.id)
+    active = set(db.scalars(select(User.id).where(User.id.in_(wanted), User.status == UserStatus.active)))
+    current = {m.user_id for m in proj.members}
+    for uid in wanted:
+        # Already-listed people stay even if the collaboration has since ended
+        if uid not in current and (uid not in partners or uid not in active):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=[{"loc": ["body", "user_ids"], "msg": "You can only add people you're currently collaborating with",
+                         "type": "value_error"}],
+            )
+    for m in list(proj.members):
+        if m.user_id not in wanted:
+            proj.members.remove(m)
+    for uid in wanted:
+        if uid not in current:
+            proj.members.append(ProjectMember(user_id=uid))
+    touch(profile)
+    db.commit()
+    return _project_out(db, proj.id)
+
+
+@router.delete("/me/joint-projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def leave_joint_project(project_id: int, db: Session = Depends(get_db), user: User = Depends(require_faculty)):
+    """Take yourself off a project someone else listed you on."""
+    member = db.get(ProjectMember, (project_id, user.id))
+    if member is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Joint project not found")
+    db.delete(member)
     db.commit()
 
 
@@ -201,4 +268,8 @@ def get_profile(user_id: int, db: Session = Depends(get_db), viewer: User = Depe
     # BR-004: deactivated faculty are hidden; same 404 so we don't reveal they exist
     if profile.user.status != UserStatus.active and viewer.role != UserRole.admin:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
-    return to_profile_out(profile)
+    # A hidden profile stays visible to oversight roles and to people already working with them
+    if profile.is_hidden and viewer.role == UserRole.faculty and viewer.id != profile.user_id:
+        if find_collaboration(db, viewer.id, profile.user_id) is None and find_pending(db, viewer.id, profile.user_id) is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+    return to_profile_out(db, profile)
