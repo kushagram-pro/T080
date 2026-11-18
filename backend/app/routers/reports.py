@@ -2,11 +2,17 @@
 
 Aggregation is done in Python over one institute's data: a few hundred faculty at most,
 so this stays fast and much easier to follow than one large SQL query.
+
+"Collaborations" means ongoing ones between two active faculty; ended collaborations still
+count in the per-month chart (they were new that month) and in ended_collaborations.
+Each report can also be downloaded as CSV for spreadsheets.
 """
+import csv
+import io
 from collections import Counter
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -40,7 +46,7 @@ class DepartmentRow(BaseModel):
     department_id: int
     department: str
     faculty: int
-    discoverable_profiles: int
+    discoverable_profiles: int   # complete and not hidden: appear in faculty search
     collaborations: int          # involving at least one member of this department
     cross_department: int        # ...where the partner is in a different department
     pending_requests: int
@@ -58,6 +64,7 @@ class ActivityReport(BaseModel):
     discoverable_profiles: int
     collaborations: int
     cross_department_collaborations: int
+    ended_collaborations: int
     requests: dict[str, int]          # by status
     acceptance_rate: float | None     # accepted / (accepted + declined)
     by_department: list[DepartmentRow]
@@ -74,7 +81,8 @@ class FacultyRow(BaseModel):
     publications: int
     projects: int
     collaborations: int
-    discoverable: bool
+    discoverable: bool   # complete and not hidden
+    hidden: bool         # the owner has hidden their profile from search
 
 
 class PartnerRow(BaseModel):
@@ -140,10 +148,11 @@ def activity(
 ):
     profiles = _active_faculty_profiles(db)
     dept_of = {p.user_id: p.department_id for p in profiles}  # active faculty only
-    collabs = [
+    every = [
         c for c in db.scalars(select(Collaboration)).all()
         if c.faculty_a in dept_of and c.faculty_b in dept_of  # both still active
     ]
+    collabs = [c for c in every if c.ended_at is None]
     reqs = db.scalars(select(CollaborationRequest)).all()
     counts = _request_counts(reqs)
     decided = counts["accepted"] + counts["declined"]
@@ -156,7 +165,7 @@ def activity(
             department_id=d.id,
             department=d.name,
             faculty=len(members),
-            discoverable_profiles=sum(1 for p in profiles if p.department_id == d.id and p.is_discoverable()),
+            discoverable_profiles=sum(1 for p in profiles if p.department_id == d.id and p.is_searchable()),
             collaborations=len(involving),
             cross_department=sum(1 for c in involving if dept_of[c.faculty_a] != dept_of[c.faculty_b]),
             pending_requests=sum(
@@ -172,14 +181,15 @@ def activity(
     for _ in range(12):
         months.append(f"{y:04d}-{m:02d}")
         y, m = (y - 1, 12) if m == 1 else (y, m - 1)
-    by_month = Counter(c.created_at.strftime("%Y-%m") for c in collabs)
+    by_month = Counter(c.created_at.strftime("%Y-%m") for c in every)
 
     return ActivityReport(
         generated_at=now,
         active_faculty=len(profiles),
-        discoverable_profiles=sum(1 for p in profiles if p.is_discoverable()),
+        discoverable_profiles=sum(1 for p in profiles if p.is_searchable()),
         collaborations=len(collabs),
         cross_department_collaborations=sum(1 for c in collabs if dept_of[c.faculty_a] != dept_of[c.faculty_b]),
+        ended_collaborations=len(every) - len(collabs),
         requests=counts,
         acceptance_rate=round(counts["accepted"] / decided, 3) if decided else None,
         by_department=rows,
@@ -215,7 +225,9 @@ def department_summary(
     members = {p.user_id: p for p in profiles if p.department_id == dept.id}
 
     collabs = [
-        c for c in db.scalars(select(Collaboration).order_by(Collaboration.created_at.desc())).all()
+        c for c in db.scalars(
+            select(Collaboration).where(Collaboration.ended_at.is_(None)).order_by(Collaboration.created_at.desc())
+        ).all()
         if c.faculty_a in by_user and c.faculty_b in by_user
         and (c.faculty_a in members or c.faculty_b in members)
     ]
@@ -252,7 +264,8 @@ def department_summary(
                 publications=len(p.publications),
                 projects=len(p.projects),
                 collaborations=per_member[p.user_id],
-                discoverable=p.is_discoverable(),
+                discoverable=p.is_searchable(),
+                hidden=p.is_hidden,
             )
             for p in members.values()
         ),
@@ -269,4 +282,59 @@ def department_summary(
         top_interests=_top(r.topic for p in members.values() for r in p.research_interests),
         collaborations=partner_rows,
         requests=_request_counts(reqs),
+    )
+
+
+# ---------- CSV downloads ----------
+
+def _cell(v) -> str:
+    """Spreadsheet-safe text: a value starting with = + - @ would run as a formula in Excel."""
+    if isinstance(v, bool):
+        return "Yes" if v else "No"
+    text = "" if v is None else str(v)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def _csv(filename: str, header: list[str], rows: list[list]) -> Response:
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(header)
+    writer.writerows([_cell(v) for v in row] for row in rows)
+    # BOM so Excel opens it as UTF-8 (names with accents stay intact)
+    return Response(
+        content="\ufeff" + out.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/activity.csv", response_class=Response,
+            responses={200: {"content": {"text/csv": {}}, "description": "One row per department"}})
+def activity_csv(
+    db: Session = Depends(get_db),
+    viewer: User = Depends(require_roles(UserRole.research_admin, UserRole.admin)),
+):
+    report = activity(db=db, _viewer=viewer)
+    return _csv(
+        f"collaboration-activity-{report.generated_at:%Y-%m-%d}.csv",
+        ["Department", "Faculty", "Profiles in search", "Collaborations", "Cross-department", "Pending requests"],
+        [[d.department, d.faculty, d.discoverable_profiles, d.collaborations, d.cross_department, d.pending_requests]
+         for d in report.by_department],
+    )
+
+
+@router.get("/department.csv", response_class=Response,
+            responses={200: {"content": {"text/csv": {}}, "description": "One row per faculty member"}})
+def department_csv(
+    department_id: int | None = Query(None, description="Required for Admin / Research Admin; ignored for Dept. Management"),
+    db: Session = Depends(get_db),
+    viewer: User = Depends(require_roles(UserRole.dept_mgmt, UserRole.research_admin, UserRole.admin)),
+):
+    report = department_summary(department_id=department_id, db=db, viewer=viewer)
+    slug = "".join(ch if ch.isalnum() else "-" for ch in report.department.lower()).strip("-")
+    return _csv(
+        f"{slug}-{report.generated_at:%Y-%m-%d}.csv",
+        ["Name", "Designation", "Expertise", "Publications", "Projects", "Collaborations", "In search", "Hidden"],
+        [[f.full_name, f.designation, "; ".join(f.expertise), f.publications, f.projects, f.collaborations,
+          f.discoverable, f.hidden] for f in report.faculty],
     )

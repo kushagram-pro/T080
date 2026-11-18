@@ -1,3 +1,5 @@
+from datetime import date, datetime, timedelta
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -26,13 +28,15 @@ from app.schemas.admin import (
     AdminUserUpdate,
     AuditEntryOut,
     AuditPage,
+    DashboardTrends,
+    MonthCount,
 )
 from app.schemas.auth import MessageResponse
 from app.security import email
 from app.security.hashing import hash_password
 from app.services import audit, password_reset, sessions
 from app.services.collaboration import cancel_pending_for
-from app.services.discovery import is_discoverable_sql
+from app.services.discovery import is_discoverable_sql, like_pattern
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -109,12 +113,12 @@ def dashboard(db: Session = Depends(get_db), _admin: User = Depends(require_admi
     a, b = aliased(User), aliased(User)
     return AdminDashboard(
         registered_faculty=db.scalar(select(func.count()).select_from(active_faculty.subquery())),
-        # Only collaborations where both people are still active count as "active connections"
+        # Only ongoing collaborations where both people are still active count as "active connections"
         active_collaborations=db.scalar(
             select(func.count(Collaboration.id))
             .join(a, a.id == Collaboration.faculty_a)
             .join(b, b.id == Collaboration.faculty_b)
-            .where(a.status == UserStatus.active, b.status == UserStatus.active)
+            .where(a.status == UserStatus.active, b.status == UserStatus.active, Collaboration.ended_at.is_(None))
         ),
         pending_requests=db.scalar(
             select(func.count(CollaborationRequest.id)).where(CollaborationRequest.status == RequestStatus.pending)
@@ -129,6 +133,33 @@ def dashboard(db: Session = Depends(get_db), _admin: User = Depends(require_admi
             .where(User.role == UserRole.faculty, User.status == UserStatus.active)
             .where(or_(FacultyProfile.id.is_(None), ~is_discoverable_sql()))
         ),
+    )
+
+
+def _last_12_months(today: date) -> list[str]:
+    y, m = today.year, today.month
+    months = []
+    for _ in range(12):
+        months.append(f"{y:04d}-{m:02d}")
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return list(reversed(months))
+
+
+def _per_month(db: Session, column, *where) -> list[MonthCount]:
+    months = _last_12_months(datetime.utcnow().date())
+    start = datetime.strptime(months[0], "%Y-%m")
+    bucket = func.to_char(column, "YYYY-MM")
+    counts = dict(db.execute(select(bucket, func.count()).where(column >= start, *where).group_by(bucket)).all())
+    return [MonthCount(month=mo, count=counts.get(mo, 0)) for mo in months]
+
+
+@router.get("/dashboard/trends", response_model=DashboardTrends)
+def dashboard_trends(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    """Charts for the admin dashboard: how activity moved over the last 12 months."""
+    return DashboardTrends(
+        registrations=_per_month(db, User.created_at, User.role == UserRole.faculty),
+        collaborations=_per_month(db, Collaboration.created_at),
+        requests=_per_month(db, CollaborationRequest.sent_at),
     )
 
 
@@ -307,14 +338,35 @@ def send_password_reset(user_id: int, db: Session = Depends(get_db), admin: User
 @router.get("/audit-logs", response_model=AuditPage)
 def audit_logs(
     action: AuditAction | None = None,
+    actor_id: int | None = Query(None, description="Only actions by this admin"),
+    target: str = Query("", max_length=200, description="Affected account's name or email contains"),
+    date_from: date | None = Query(None, description="On or after this day (UTC)"),
+    date_to: date | None = Query(None, description="On or before this day (UTC)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[{"loc": ["query", "date_to"], "msg": "The end date is before the start date", "type": "value_error"}],
+        )
     query = select(AuditLog)
     if action is not None:
         query = query.where(AuditLog.action == action)
+    if actor_id is not None:
+        query = query.where(AuditLog.actor_id == actor_id)
+    if target.strip():
+        target_user = aliased(User)
+        pattern = like_pattern(target.strip())
+        query = query.join(target_user, target_user.id == AuditLog.target_user_id).where(
+            or_(target_user.full_name.ilike(pattern, escape="\\"), target_user.email.ilike(pattern, escape="\\"))
+        )
+    if date_from is not None:
+        query = query.where(AuditLog.created_at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to is not None:
+        query = query.where(AuditLog.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time()))
     total = db.scalar(select(func.count()).select_from(query.subquery()))
     rows = db.scalars(
         query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())

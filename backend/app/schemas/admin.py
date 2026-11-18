@@ -104,6 +104,18 @@ class AdminDashboard(BaseModel):
     incomplete_profiles: int
 
 
+class MonthCount(BaseModel):
+    month: str  # "2026-10"
+    count: int
+
+
+class DashboardTrends(BaseModel):
+    """Last 12 months, oldest first, empty months included."""
+    registrations: list[MonthCount]    # faculty accounts created (self-registered or by an admin)
+    collaborations: list[MonthCount]   # collaborations started
+    requests: list[MonthCount]         # collaboration requests sent
+
+
 class AuditEntryOut(BaseModel):
     id: int
     action: AuditAction
