@@ -57,8 +57,27 @@ def test_filters_by_department_and_designation(client, people):
     assert names(search(client, people["me"], department_id=people["depts"]["physics"].id)) == ["Beta", "Vlsi"]
 
 
+@pytest.mark.req("EXT-009", "FR-018", "BR-004", "BR-005", "BR-016")
+def test_search_by_name(client, people, make):
+    make.faculty("Ananya Iyer", department=people["depts"]["cse"])
+    make.faculty("Rohan Iyer", department=people["depts"]["physics"])
+    assert names(search(client, people["me"], name="iyer")) == ["Ananya Iyer", "Rohan Iyer"]
+    assert names(search(client, people["me"], name="IYER ananya")) == ["Ananya Iyer"]  # every word, any order
+    assert names(search(client, people["me"], name="iyer", department_id=people["depts"]["physics"].id)) == ["Rohan Iyer"]
+    # Same visibility rules as keyword search: not yourself, not incomplete, not deactivated
+    assert names(search(client, people["me"], name="me")) == []
+    assert names(search(client, people["me"], name="incomplete")) == []
+    assert names(search(client, people["me"], name="gone")) == []
+
+
+@pytest.mark.req("EXT-009")
+def test_name_and_keywords_combine(client, people):
+    assert names(search(client, people["me"], q="learning", name="beta")) == ["Beta"]
+    assert names(search(client, people["me"], name="50%")) == []  # wildcards are literal here too
+
+
 @pytest.mark.req("AC-020")
-@pytest.mark.parametrize("params", [{}, {"q": "a"}, {"q": " , ; "}])
+@pytest.mark.parametrize("params", [{}, {"q": "a"}, {"q": " , ; "}, {"name": "a"}, {"name": "   "}])
 def test_empty_search_prompts_for_keyword(client, people, params):
     assert search(client, people["me"], **params).status_code == 422
 

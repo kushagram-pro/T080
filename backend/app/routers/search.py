@@ -35,9 +35,15 @@ def _bad_request(msg: str):
     )
 
 
+def parse_name(name: str) -> list[str]:
+    """Words of a name search; every word must appear in the faculty member's name."""
+    return name.split()[:MAX_TERMS] if len(name.strip()) >= MIN_TERM_LEN else []
+
+
 @router.get("", response_model=SearchPage)
 def search(
     q: str = Query("", max_length=500, description="Keywords, comma separated"),
+    name: str = Query("", max_length=150, description="Faculty name, or part of it"),
     department_id: int | None = None,
     designation: str | None = None,
     page: int = Query(1, ge=1),
@@ -49,16 +55,20 @@ def search(
 
     Keywords match expertise and research interests (case-insensitive, partial: "learning"
     finds "Machine Learning"). Results are ranked by how many of the keywords matched.
-    With no keywords, a department and/or designation filter browses those faculty by name.
+    `name` finds faculty by name: every word must appear in it, in any order ("iyer ananya").
+    With no keywords, a name, department and/or designation filter browses those faculty by name.
     """
     terms = parse_terms(q)
+    name_words = parse_name(name)
     if designation is not None and designation not in DESIGNATIONS:
         _bad_request(f"Unknown designation. Choose one of: {', '.join(DESIGNATIONS)}")
-    if not terms and department_id is None and not designation:
+    if not terms and not name_words and department_id is None and not designation:
         # AC-020
-        _bad_request("Enter at least one keyword (2+ characters), or choose a department or designation")
+        _bad_request("Enter at least one keyword or name (2+ characters), or choose a department or designation")
 
     query = visible_profiles(viewer)
+    for word in name_words:
+        query = query.where(FacultyProfile.full_name.ilike(like_pattern(word), escape="\\"))
     if department_id is not None:
         query = query.where(FacultyProfile.department_id == department_id)  # FR-019 / AC-026
     if designation:

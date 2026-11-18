@@ -5,22 +5,23 @@ import { Alert, Spinner } from '../components/ui'
 
 const PAGE_SIZE = 12
 
-// The URL is the source of truth (?q=…&department_id=…&designation=…&page=…),
+// The URL is the source of truth (?q=…|name=…&department_id=…&designation=…&page=…),
 // so results survive a reload and the back button returns to them (FR-022).
 export default function Search() {
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
+  const name = params.get('name') ?? ''
   const departmentId = params.get('department_id') ?? ''
   const designation = params.get('designation') ?? ''
   const page = Number(params.get('page') ?? 1)
-  const hasQuery = Boolean(q.trim() || departmentId || designation)
+  const hasQuery = Boolean(q.trim() || name.trim() || departmentId || designation)
 
   const [departments, setDepartments] = useState([])
   const [designations, setDesignations] = useState([])
   const [prompt, setPrompt] = useState(null)
   // Each result remembers which search it answers; "loading" = the URL asks for a different one
   const [state, setState] = useState({ key: null, data: null, error: null })
-  const searchKey = `${q}|${departmentId}|${designation}|${page}`
+  const searchKey = `${q}|${name}|${departmentId}|${designation}|${page}`
 
   useEffect(() => {
     departmentsApi.list().then(setDepartments).catch(() => {})
@@ -31,18 +32,18 @@ export default function Search() {
     if (!hasQuery) return
     let cancelled = false
     searchApi
-      .search({ q, department_id: departmentId, designation, page, page_size: PAGE_SIZE })
+      .search({ q, name, department_id: departmentId, designation, page, page_size: PAGE_SIZE })
       .then((data) => !cancelled && setState({ key: searchKey, data, error: null }))
       .catch((error) => !cancelled && setState({ key: searchKey, data: null, error }))
     return () => {
       cancelled = true
     }
-  }, [hasQuery, q, departmentId, designation, page, searchKey])
+  }, [hasQuery, q, name, departmentId, designation, page, searchKey])
 
   function search(form) {
     setPrompt(null)
     const next = {}
-    if (form.q.trim()) next.q = form.q.trim()
+    if (form.text.trim()) next[form.mode === 'name' ? 'name' : 'q'] = form.text.trim()
     if (form.department_id) next.department_id = form.department_id
     if (form.designation) next.designation = form.designation
     setParams(next)
@@ -65,17 +66,19 @@ export default function Search() {
       <section className="page-header">
         <div>
           <h1>Find collaborators</h1>
-          <p className="muted">Search faculty by expertise and research interests. Separate keywords with commas.</p>
+          <p className="muted">Search faculty by expertise and research interests, or look someone up by name.</p>
         </div>
       </section>
 
       <SearchForm
-        key={`${q}|${departmentId}|${designation}`}
-        initial={{ q, department_id: departmentId, designation }}
+        key={`${q}|${name}|${departmentId}|${designation}`}
+        initial={{ mode: name ? 'name' : 'keywords', text: name || q, department_id: departmentId, designation }}
         departments={departments}
         designations={designations}
         onSearch={search}
-        onEmpty={() => setPrompt('Enter at least one keyword, or choose a department or designation.')}
+        onEmpty={(mode) => setPrompt(mode === 'name'
+          ? 'Enter at least 2 letters of a name, or choose a department or designation.'
+          : 'Enter at least one keyword, or choose a department or designation.')}
         onTyping={() => setPrompt(null)}
       />
 
@@ -85,7 +88,7 @@ export default function Search() {
       {!hasQuery && !prompt && (
         <div className="card empty-state">
           <h2>Who are you looking for?</h2>
-          <p className="muted">Try a research area like “computer vision”, or browse a department.</p>
+          <p className="muted">Try a research area like “computer vision”, a colleague’s name, or browse a department.</p>
         </div>
       )}
 
@@ -105,8 +108,10 @@ export default function Search() {
               <h2>No matching profiles</h2>
               <p className="muted">
                 {filtered
-                  ? 'Nobody matches that combination. Try removing a filter or using a broader keyword.'
-                  : 'Try a broader keyword, or check the spelling.'}
+                  ? 'Nobody matches that combination. Try removing a filter or a broader search.'
+                  : name
+                    ? 'Check the spelling, or try just the first or last name.'
+                    : 'Try a broader keyword, or check the spelling.'}
               </p>
             </div>
           ) : (
@@ -153,26 +158,46 @@ export default function Search() {
 function SearchForm({ initial, departments, designations, onSearch, onEmpty, onTyping }) {
   const [form, setForm] = useState(initial)
 
+  const byName = form.mode === 'name'
+
   function submit(e) {
     e.preventDefault()
-    // AC-020: empty search prompts instead of searching
-    if (!form.q.trim() && !form.department_id && !form.designation) onEmpty()
+    // AC-020: empty search prompts instead of searching (a name needs 2+ letters, as on the server)
+    const text = form.text.trim()
+    if ((byName ? text.length < 2 : !text) && !form.department_id && !form.designation) onEmpty(form.mode)
     else onSearch(form)
   }
 
   return (
     <form className="card search-bar rise" onSubmit={submit} noValidate>
+      <div className="segmented search-mode" role="radiogroup" aria-label="Search by">
+        {[['keywords', 'Expertise'], ['name', 'Name']].map(([mode, label]) => (
+          <label key={mode} className={form.mode === mode ? 'active' : ''}>
+            <input
+              type="radio"
+              name="search-mode"
+              value={mode}
+              checked={form.mode === mode}
+              onChange={() => {
+                setForm((f) => ({ ...f, mode }))
+                onTyping()
+              }}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
       <div className="search-input">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
         <input
-          value={form.q}
+          value={form.text}
           onChange={(e) => {
-            setForm((f) => ({ ...f, q: e.target.value }))
+            setForm((f) => ({ ...f, text: e.target.value }))
             onTyping()
           }}
-          placeholder="e.g. machine learning, VLSI, medical imaging"
-          aria-label="Keywords"
-          maxLength={500}
+          placeholder={byName ? 'Search by first or last name' : 'e.g. machine learning, VLSI, medical imaging'}
+          aria-label={byName ? 'Faculty name' : 'Keywords'}
+          maxLength={byName ? 150 : 500}
           autoFocus
         />
       </div>
